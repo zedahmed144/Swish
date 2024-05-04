@@ -1,0 +1,15 @@
+{
+  "development": {
+    "dialect": "sqlite",
+    "storage": "./db.development.sqlite",
+    "logging": false 
+  },
+  "staging": {
+    "host": "intrv-staging-db.c9jzbimzzeyf.us-east-1.rds.amazonaws.com",
+    "dialect": "mysql"
+  },
+  "production": {
+    "host": "intrv-production-db.c9jzbimzzeyf.us-east-1.rds.amazonaws.com",
+    "dialect": "mysql"
+  }
+}

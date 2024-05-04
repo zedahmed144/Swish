@@ -1,0 +1,278 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-clusterrole
+  namespace: jenkins
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  # - apiGroups: [""]
+  #   resources: ["pods"]
+  #   verbs: ["create","delete","get","list","patch","update","watch"]
+  # - apiGroups: [""]
+  #   resources: ["pods/exec"]
+  #   verbs: ["create","delete","get","list","patch","update","watch"]
+  # - apiGroups: [""]
+  #   resources: ["pods/log"]
+  #   verbs: ["get","list","watch"]
+  # - apiGroups: [""]
+  #   resources: ["secrets"]
+  #   verbs: ["get"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-sa
+  namespace: jenkins
+  #annotations:
+  #  eks.amazonaws.com/role-arn: arn:aws:iam::036692858685:role/jenkins-secret-provider-role
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-clusterrolebinding
+  namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jenkins-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: jenkins-sa
+  namespace: jenkins
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-svc
+  namespace: jenkins
+spec:
+  selector: 
+    app: jenkins
+  type: ClusterIP
+  ports: 
+    - port: 8080
+      targetPort: 8080
+      name: http
+    - port: 50000
+      targetPort: 50000
+      name: agent
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  serviceName: "jenkins-svc"
+  replicas: 1    
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins-sa
+      volumes:
+        - name: jenkins-volume
+          hostPath:
+            path: /var/jenkins_home
+        - name: jenkins-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: "aws-secrets"
+      containers:
+        - name: jenkins
+          image: ACCT_NUMBER.dkr.ecr.REGION.amazonaws.com/IMAGE:VERSION
+          env:
+            - name: JAVA_OPTS
+              value: -Djenkins.install.runSetupWizard=false
+            - name: GITHUB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-secrets
+                  key: GITHUB_PASS
+            - name: GITHUB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-secrets
+                  key: GITHUB_USER
+            - name: GITHUB_REPO
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-secrets
+                  key: GITHUB_REPO
+            - name: GITHUB_BRANCH
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-secrets
+                  key: GITHUB_BRANCH
+            - name: JENKINS_BUILD_USER
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_BUILD_USER
+                  name: jenkins-secrets
+            - name: JENKINS_BUILD_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_BUILD_PASSk
+                  name: jenkins-secrets
+            - name: JENKINS_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_ADMIN_USER
+                  name: jenkins-secrets
+            - name: JENKINS_ADMIN_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_ADMIN_PASS
+                  name: jenkins-secrets
+            - name: JENKINS_READ_USER
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_READ_USER
+                  name: jenkins-secrets
+            - name: JENKINS_READ_PASS
+              valueFrom:
+                secretKeyRef:
+                  key: JENKINS_READ_PASS
+                  name: jenkins-secrets  
+          ports:
+            - name: http-port
+              containerPort: 8080
+            - name: jnlp-port
+              containerPort: 50000
+          livenessProbe:
+            httpGet:
+              path: "/login"
+              port: 8080
+            initialDelaySeconds: 120 # needed here because jenkins base image waits for 120 seconds before it brings up jenkins
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: "/login"
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+          - name: jenkins-volume
+            mountPath: /var/jenkins_home
+          - name: jenkins-secrets
+            mountPath: "/mnt/secret-store"
+            readOnly: true
+      nodeSelector:
+        node.kubernetes.io/instance-type: t3.medium
+  volumeClaimTemplates:
+  - metadata:
+      name: jenkins-volume
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "ebs-sc"
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: jenkins-storageclass
+  namespace: jenkins
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+mountOptions:
+  - debug
+volumeBindingMode: Immediate
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1alpha1
+kind: SecretProviderClass
+metadata:
+  name: aws-secrets
+  namespace: jenkins
+spec:
+  provider: aws
+  secretObjects:
+  - secretName: jenkins-secrets # this is a k8s secret name that is created by secret provider
+    type: Opaque
+    data: 
+    - objectName: githubUser
+      key: GITHUB_USER
+    - objectName: githubToken
+      key: GITHUB_PASS
+    - objectName: githubRepo
+      key: GITHUB_REPO
+    - objectName: githubBranch
+      key: GITHUB_BRANCH
+    - objectName: admin
+      key: JENKINS_ADMIN_USER
+    - objectName: adminPass
+      key: JENKINS_ADMIN_PASS
+    - objectName: build
+      key: JENKINS_BUILD_USER
+    - objectName: buildPass
+      key: JENKINS_BUILD_PASS
+    - objectName: read
+      key: JENKINS_READ_USER
+    - objectName: readPass
+      key: JENKINS_READ_PASS
+
+
+  parameters: 
+    objects: |
+      - objectName: jenkins/secrets/github/user
+        objectType: "secretsmanager"
+        objectAlias: githubUser
+      - objectName: jenkins/secrets/github/token
+        objectType: "secretsmanager"
+        objectAlias: githubToken
+      - objectName: jenkins/secrets/github/repo
+        objectType: "secretsmanager"
+        objectAlias: githubRepo
+      - objectName: jenkins/secrets/github/branch
+        objectType: "secretsmanager"
+        objectAlias: githubBranch
+      - objectName: jenkins/secrets/user/admin
+        objectType: "secretsmanager"
+        objectAlias: admin
+      - objectName: jenkins/secrets/user/admin/pass
+        objectType: "secretsmanager"
+        objectAlias: adminPass
+      - objectName: jenkins/secrets/user/build
+        objectType: "secretsmanager"
+        objectAlias: build
+      - objectName: jenkins/secrets/user/build/pass
+        objectType: "secretsmanager"
+        objectAlias: buildPass
+      - objectName: jenkins/secrets/user/read
+        objectType: "secretsmanager"
+        objectAlias: read
+      - objectName: jenkins/secrets/user/read/pass
+        objectType: "secretsmanager"
+        objectAlias: readPass
+
+
+      
+
+
+      
+
+
+      

@@ -36,7 +36,9 @@ spec:
         sh ''' 
         export AWS_DEFAULT_REGION=us-east-1
         set -xe
-        kubectl apply -f demo.yaml
+        cd Timeoff-App/
+        make deploy
+        cd ..
         '''
       }
     }
